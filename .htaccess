@@ -1,0 +1,7 @@
+RewriteEngine on
+RewriteCond %{REQUEST_FILENAME} !app.php
+RewriteCond %{REQUEST_FILENAME} !test.php
+RewriteCond %{REQUEST_FILENAME} !/assets/(.+)\.(.+)
+RewriteRule  ^(.*)$ app.php/$1 [L]
+
+

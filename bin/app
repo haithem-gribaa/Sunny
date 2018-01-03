@@ -1,0 +1,318 @@
+<?php
+define('PROJECT_DIR', dirname(__DIR__));
+define('DS', DIRECTORY_SEPARATOR);
+
+
+function generate_routes(ReflectionMethod $reflection, &$routes) {
+    $r = new ReflectionMethod($reflection->class, $reflection->name);
+    $c = $r->getDocComment();
+    preg_match('#\@(.*)_url \[(.*)\]\:(.*)#', $c, $match);
+    if (!isset($match[1]) || !isset($match[3])) {
+        return;
+    }
+    $name = $match[1];
+    $path = trim($match[3]);
+    $route = ['methods' => array_map('strtolower', explode(',', $match[2])), 'base' => '', 'regex' => '', 'count' => count(explode('/', $match[3])), 'controller' => $reflection->class, 'method' => $reflection->name];
+    preg_match_all('#:([a-zA-Z1-9_]+)#',$path ,$vars);
+    $vars = $vars[1];
+    $route['regex'] = $path;
+    $route['base'] = $path;
+    if(!$vars)
+    {
+        $route['regex'] = '^' . $path . '$';
+        $routes[$name] = $route;
+        return ;
+    }
+    /*
+     * boucle sur les var
+     */
+    foreach ($vars as $v) 
+    {
+        //si n'a pas de parametres
+        if(!preg_match('#:'.$v.'\(([^/]+)\)#', $path,$params))
+        {
+            $route['regex'] = preg_replace('#:'.$v.'#', '([^/]+)', $route['regex']);
+            $route['args'][$v] = FALSE;
+        }
+        else 
+        {
+            $params = explode(',',$params[1]);
+            $route['base'] = preg_replace('#:'.$v.'\(([^/]+)\)#', ':'.$v,$route['base']);
+            if($params[0] == 'NULL')
+            {
+                $route['regex'] = preg_replace('#:'.$v.'\(([^/]+)\)#', '([^/]+)', $route['regex']);
+            }
+            else 
+            {
+                $route['regex'] = preg_replace('#:'.$v.'\(([^/]+)\)#', '('.$params[0].')',$route['regex']);
+            }
+            $route['args'][$v] = isset($params[1])?$params[1]:FALSE;
+        }
+    }
+    $route['regex'] = '^'.$route['regex'].'$';
+    $routes[$name] = $route;
+}
+
+function update_routes()
+{
+    $routes = [];
+    $controllers = projectControllers(PROJECT_DIR.DS.'app');
+    foreach ($controllers as $v)
+    {
+        $r = new ReflectionClass($v);
+        $methods = $r->getMethods(ReflectionMethod::IS_PUBLIC);
+        foreach ($methods as $v1)
+        {
+            generate_routes($v1,$routes);
+        }
+    }
+    
+    $str = var_export($routes,TRUE);
+    file_put_contents(PROJECT_DIR.DS.'app.php', preg_replace('#\/\/start set routes(.*)\/\/end set routes#is', "//start set routes\n".'Container::setRoutes('.$str.');'."\n//end set routes", file_get_contents(PROJECT_DIR.DS.'app.php')));
+}
+
+function generate_module($argv)
+{
+    if(!isset($argv[1]))
+    {
+        die("\n\t[-] You must enter module name \n\n");
+    }
+    $module = ucfirst($argv[1]);
+    if(is_dir(PROJECT_DIR.DS.'app'.DS.$module))
+    {
+        die("\n\t[-] Module ".$module." already exists \n\n");
+    }
+    if(!@mkdir(PROJECT_DIR.DS.'app'.DS.$module))
+    {
+        die("\n\t[-] Failed to create module ".$module." \n\n");
+    }
+    if(!@mkdir(PROJECT_DIR.DS.'app'.DS.$module.DS.'views'))
+    {
+        die("\n\t[-] Failed to create views folder \n\n");
+    }
+    if(isset($argv[2]))
+    {
+        $controllers = array_unique(explode(',', $argv[2]));
+        foreach ($controllers as $v)
+        {
+            $handle = fopen(PROJECT_DIR.DS.'app'.DS.$module.DS.ucfirst($v).'.php', 'a+');
+            $str = '<?php
+namespace app\\'.$module.';
+class '.  ucfirst($v).' {
+    
+}';
+            fwrite($handle, $str);
+            fclose($handle);
+        }
+    }
+    die("\n\t[+] Module ".$module." generated \n\n");
+}
+
+
+
+
+function projectControllers($dir,&$results = array())
+{
+    $files = scandir($dir);
+    foreach($files as $key => $value){
+        $path = realpath($dir.DIRECTORY_SEPARATOR.$value);
+        if(!is_dir($path)) {
+            $inf = pathinfo($path);
+           if(isset($inf['extension'])&&$inf['extension'] == 'php'&&starts_with_upper($inf['filename']))
+           {
+               $namespace = str_replace('.php','',str_replace('/','\\',str_replace(PROJECT_DIR.DS, '',$path)));
+               
+               if(class_exists($namespace))
+               {
+                   $results[] = $namespace;
+               }
+           }
+                
+        } else if($value != "." && $value != "..") {
+            projectControllers($path, $results);
+        }
+    }
+    return $results;
+}
+function starts_with_upper($str) {
+    $chr = mb_substr ($str, 0, 1, "UTF-8");
+    return mb_strtolower($chr, "UTF-8") != $chr;
+}
+
+
+
+
+
+
+function stringEndWith($string, $with)
+{
+        return $with === "" || (($temp = strlen($string) - strlen($with)) >= 0 && strpos($string, $with, $temp) !== false);
+}
+
+function projectViews()
+{
+     function rec($dir,&$views) 
+    {
+        $files = scandir($dir);
+        foreach ($files as $v)
+        {
+            $path = $dir.DS.$v;
+            
+            $inf = pathinfo($path);
+           if(isset($inf['extension'])&&$inf['extension'] == 'php')
+           {
+               $views[] = $path;
+           }
+           elseif($v!='.'&&$v!='..')
+           {
+               rec($path,$views);
+           }
+        }
+    };
+    $mods = scandir(PROJECT_DIR.DS.'app');
+    $views = [];
+    foreach ($mods as $v)
+    {
+        $d = PROJECT_DIR.DS.'app'.DS.$v.DS.'views';
+        if(is_dir($d))
+        {
+            rec($d,$views);
+        }
+    }
+    return $views;
+}
+
+function getSubdirs($dir)
+{
+    $iter = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::SELF_FIRST,
+        RecursiveIteratorIterator::CATCH_GET_CHILD // Ignore "Permission denied"
+    );
+
+    $paths = array($dir);
+    foreach ($iter as $path => $dir) {
+        if ($dir->isDir()) {
+            $paths[] = $path;
+        }
+    }
+
+    return $paths;
+    
+    
+}
+
+function update_assets($view = FALSE)
+{
+    if($view&&isset($view[1]))
+    {
+        $parts = explode('.', $view[1]);
+        if(count($parts)<=1)
+        {
+            print "[-] Unknown view ".$view[1]."\n";
+            die;
+        }
+        $v = PROJECT_DIR.DS.'app'.DS.ucfirst($parts[0]).DS.'views'.DS;
+        array_shift($parts);
+        $v.= implode(DS, $parts).'.php';
+        if(!is_file($v))
+        {
+            print "[-] Unknown view ".$view[1]."\n";
+            die;
+        }
+        $views = [$v];
+    }
+    else
+    {
+        $views = projectViews();
+    }
+    foreach ($views as $v)
+    {
+        $content = preg_replace("/(^[\r\n]*|[\r\n]+)[\s\t]*[\r\n]+/", "\n",preg_replace('/<!--(.|\s)*?-->/', '', file_get_contents($v)));
+        
+        preg_match_all('/src *= *["\']?([^"\']*)/i',$content, $assets);
+        preg_match_all('/href *= *["\']?([^"\']*)/i',$content, $css);
+        if(isset($assets[1])&&$assets[1])
+        {
+            replaceAsset($assets[1],$content);
+        }
+        if(isset($css[1])&&$css[1])
+        {
+            replaceAsset($css[1],$content);
+        }
+        file_put_contents($v, $content);
+    }
+    
+}
+
+function replaceAsset(&$asset,&$content)
+{
+    $dirs = getSubdirs(PROJECT_DIR.DS.'res'.DS.'assets');
+    foreach ($asset as $v)
+    {
+        
+        if(filter_var($v,FILTER_VALIDATE_URL))
+        {
+            continue;
+        }
+        if(file_exists(dirname(PROJECT_DIR).implode(DS, explode('/', $v))))
+        {
+            continue;
+        }
+        
+        $parts = array_filter(explode('/', $v));
+        $dist = 0;
+            while ($dist< count($dirs))
+            {
+                for ($i = 0;$i< count($parts);$i++)
+                {
+                    $a = $dirs[$dist].DS.implode(DS,array_slice($parts, $i));
+                    if(is_file($a)&& file_exists($a))
+                    {
+                        $n = (str_replace(DS,'/',str_replace(PROJECT_DIR, app\Parameter::BASE_DIR, $a)));
+                        $content = preg_replace('#'.$v.'#', $n, $content);
+                        $dist = count($dirs)+1;
+                        break;
+                    }
+                }
+                $dist++;
+            }
+    }
+}
+
+
+spl_autoload_register(function($class){
+    $path = implode(DS, explode('\\',$class));
+    $p1 = PROJECT_DIR.DS.'vendor'.DS.$path.'.php';
+    if(file_exists($p1))
+    {
+        require_once $p1;
+        return;
+    }
+    $p2 = PROJECT_DIR.DS.DS.$path.'.php';
+    if(file_exists($p2))
+    {
+        require_once $p2;
+    }
+});
+if(!isset($argv[1]))
+{
+    die("\n\t[-] No command entred \n\n");
+}
+$e = explode(':', $argv[1]);
+if(!count($e) == 2)
+{
+    die("\n\t[-] Unknown command ".$argv[1]." \n\n");
+}
+$func = implode('_', $e);
+if(!function_exists($func))
+{
+    die("\n\t[-] Unknown command ".$argv[1]." \n\n");
+}
+array_shift($argv);
+call_user_func($func,$argv);
+
+
+
+
+
